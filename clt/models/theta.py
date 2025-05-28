@@ -48,6 +48,10 @@ class ThetaManager(nn.Module):
             self.rank = dist.get_rank(process_group)
 
         if self.config.activation_fn == "jumprelu":
+            if self.config.jumprelu_threshold == 0:
+                logger.warning(
+                    f"Rank {self.rank}: jumprelu_threshold is 0, expecting to load log_threshold from checkpoint."
+                )
             initial_threshold_val = torch.ones(
                 config.num_layers, config.num_features, device=self.device, dtype=self.dtype
             ) * torch.log(torch.tensor(config.jumprelu_threshold, device=self.device, dtype=self.dtype))

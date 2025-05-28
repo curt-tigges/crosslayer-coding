@@ -40,7 +40,6 @@ class CLTConfig:
         assert self.num_features > 0, "Number of features must be positive"
         assert self.num_layers > 0, "Number of layers must be positive"
         assert self.d_model > 0, "Model dimension must be positive"
-        assert self.jumprelu_threshold > 0, "JumpReLU threshold must be positive"
         valid_norm_methods = ["auto", "estimated_mean_std", "none"]
         assert (
             self.normalization_method in valid_norm_methods

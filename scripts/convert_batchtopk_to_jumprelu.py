@@ -772,57 +772,57 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--batchtopk_checkpoint_path",
+        "--batchtopk-checkpoint-path",
         type=str,
         required=True,
         help="Path to the saved BatchTopK model checkpoint (.pt file or sharded directory).",
     )
     parser.add_argument(
-        "--config_path",
+        "--config-path",
         type=str,
         required=True,
         help="Path to the JSON config file corresponding to the BatchTopK model.",
     )
     parser.add_argument(
-        "--activation_data_path",
+        "--activation-data-path",
         type=str,
         required=True,
         help="Path to the activation data manifest directory (for LocalActivationStore).",
     )
     parser.add_argument(
-        "--output_model_path",
+        "--output-model-path",
         type=str,
         required=True,
         help="Path to save the converted JumpReLU model's state_dict (.pt).",
     )
     parser.add_argument(
-        "--output_config_path",
+        "--output-config-path",
         type=str,
         required=True,
         help="Path to save the converted JumpReLU model's config (.json).",
     )
 
     parser.add_argument(
-        "--num_batches_for_theta_estimation",
+        "--num-batches-for-theta-estimation",
         type=int,
         default=100,
         help="Number of batches to use for theta estimation.",
     )
     parser.add_argument(
-        "--estimation_batch_size_tokens",
+        "--estimation-batch-size-tokens",
         type=int,
         default=1024,
         help="Number of tokens per batch for theta estimation.",
     )
     parser.add_argument(
-        "--default_theta_value", type=float, default=1e6, help="Default theta value for features that never activated."
+        "--default-theta-value", type=float, default=1e6, help="Default theta value for features that never activated."
     )
 
     parser.add_argument(
         "--device", type=str, default=None, help="Device to use (e.g., 'cpu', 'cuda', 'cuda:0'). Auto-detects if None."
     )
     parser.add_argument(
-        "--activation_dtype",
+        "--activation-dtype",
         type=str,
         default="float32",
         help="Data type for loading activations (e.g., 'float16', 'bfloat16', 'float32').",
@@ -831,19 +831,19 @@ if __name__ == "__main__":
         "--seed", type=int, default=42, help="Random seed for activation store sampling (if applicable)."
     )
     parser.add_argument(
-        "--num_tokens_for_l0_check_script",
+        "--num-tokens-for-l0-check-script",
         type=int,
         default=1024,
         help="Number of random tokens to sample from the collected data for the empirical L0 check in this script.",
     )
     parser.add_argument(
-        "--num_batches_for_l0_check",
+        "--num-batches-for-l0-check",
         type=int,
         default=1,
         help="Number of batches to fetch from activation store for the empirical L0 check.",
     )
     parser.add_argument(
-        "--l0_check_batch_size_tokens",
+        "--l0-check-batch-size-tokens",
         type=int,
         default=None,  # Default to None, will use estimation_batch_size_tokens if not set
         help="Number of tokens per batch for fetching data for the L0 check. Defaults to estimation_batch_size_tokens if not specified.",
@@ -851,54 +851,54 @@ if __name__ == "__main__":
 
     # Args for Layer-wise L0 Calibration
     parser.add_argument(
-        "--l0_layerwise_calibrate",
+        "--l0-layerwise-calibrate",
         action="store_true",
         help="If set, perform an additional calibration step to match layer-wise L0s from the original model.",
     )
     parser.add_argument(
-        "--l0_calibration_batches",
+        "--l0-calibration-batches",
         type=int,
         default=1,
         help="Number of batches from activation_data_path to use for L0 calibration step.",
     )
     parser.add_argument(
-        "--l0_calibration_batch_size_tokens",
+        "--l0-calibration-batch-size-tokens",
         type=int,
         default=None,
         help="Batch size in tokens for L0 calibration. Defaults to l0_check_batch_size_tokens or estimation_batch_size_tokens.",
     )
     parser.add_argument(
-        "--l0_target_model_config_path",
+        "--l0-target-model-config-path",
         type=str,
         default=None,
         help="Path to the original model's config JSON for L0 target calculation. Defaults to --config_path.",
     )
     parser.add_argument(
-        "--l0_target_model_checkpoint_path",
+        "--l0-target-model-checkpoint-path",
         type=str,
         default=None,
         help="Path to the original model's checkpoint for L0 target calculation. Defaults to --batchtopk_checkpoint_path.",
     )
     parser.add_argument(
-        "--l0_calibration_tolerance",
+        "--l0-calibration-tolerance",
         type=float,
         default=0.5,
         help="Tolerance (in number of active features) for matching target L0 during layer-wise calibration.",
     )
     parser.add_argument(
-        "--l0_calibration_search_min_scale",
+        "--l0-calibration-search-min-scale",
         type=float,
         default=0.1,
         help="Minimum scale factor for layer-wise L0 calibration search.",
     )
     parser.add_argument(
-        "--l0_calibration_search_max_scale",
+        "--l0-calibration-search-max-scale",
         type=float,
         default=10.0,
         help="Maximum scale factor for layer-wise L0 calibration search.",
     )
     parser.add_argument(
-        "--l0_calibration_max_iters",
+        "--l0-calibration-max-iters",
         type=int,
         default=15,
         help="Maximum iterations for binary search per layer during L0 calibration.",
@@ -911,12 +911,12 @@ if __name__ == "__main__":
 
 # Example Usage:
 # python scripts/convert_batchtopk_to_jumprelu.py \\
-#   --batchtopk_checkpoint_path clt_training_logs/clt_pythia_batchtopk_train_XYZ/final \\
-#   --config_path clt_training_logs/clt_pythia_batchtopk_train_XYZ/cfg.json \\
-#   --activation_data_path ./tutorial_activations_local_1M_pythia/EleutherAI/pythia-70m/monology/pile-uncopyrighted_train \\
-#   --output_model_path clt_training_logs/clt_pythia_batchtopk_train_XYZ/final_jumprelu_sf1.5/clt_model_jumprelu.pt \\
-#   --output_config_path clt_training_logs/clt_pythia_batchtopk_train_XYZ/final_jumprelu_sf1.5/cfg_jumprelu.json \\
-#   --num_batches_for_theta_estimation 50 \\
+#   --batchtopk-checkpoint-path clt_training_logs/clt_pythia_batchtopk_train_XYZ/final \\
+#   --config-path clt_training_logs/clt_pythia_batchtopk_train_XYZ/cfg.json \\
+#   --activation-data-path ./tutorial_activations_local_1M_pythia/EleutherAI/pythia-70m/monology/pile-uncopyrighted_train \\
+#   --output-model-path clt_training_logs/clt_pythia_batchtopk_train_XYZ/final_jumprelu_sf1.5/clt_model_jumprelu.pt \\
+#   --output-config-path clt_training_logs/clt_pythia_batchtopk_train_XYZ/final_jumprelu_sf1.5/cfg_jumprelu.json \\
+#   --num-batches-for-theta-estimation 50 \\
 #   --device cuda
-#   --l0_layerwise_calibrate \
-#   --l0_calibration_tolerance 0.2
+#   --l0-layerwise-calibrate \
+#   --l0-calibration-tolerance 0.2

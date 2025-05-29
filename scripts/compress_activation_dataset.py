@@ -36,31 +36,31 @@ def parse_arguments():
     """Parse command-line arguments for dataset compression."""
     parser = argparse.ArgumentParser(description="Compress an HDF5 activation dataset to Zarr format.")
     parser.add_argument(
-        "--input_dir",
+        "--input-dir",
         type=str,
         required=True,
         help="Path to the input HDF5 activation dataset directory (e.g., ./activations/model/dataset_split).",
     )
     parser.add_argument(
-        "--output_dir",
+        "--output-dir",
         type=str,
         required=True,
         help="Path to the output Zarr activation dataset directory.",
     )
     parser.add_argument(
-        "--zarr_chunk_size",
+        "--zarr-chunk-size",
         type=int,
         default=1000,  # Default Zarr chunking along the token dimension
         help="Chunk size for the first dimension (tokens) in the output Zarr arrays.",
     )
     parser.add_argument(
-        "--compression_level",
+        "--compression-level",
         type=int,
         default=5,  # Blosc default is 5
         help="Blosc compression level (0-9). 0 means no compression, 9 is max.",
     )
     parser.add_argument(
-        "--compression_shuffle",
+        "--compression-shuffle",
         type=int,
         default=1,  # Default to Blosc.SHUFFLE
         choices=[0, 1, 2],  # Blosc.NOSHUFFLE, Blosc.SHUFFLE, Blosc.BITSHUFFLE

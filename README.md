@@ -50,15 +50,15 @@ For training with locally stored activations (`--activation-source local_manifes
 **Example Command:**
 
 ```bash
-python scripts/generate_activations.py \\
-    --model-name gpt2 \\
-    --dataset-path monology/pile-uncopyrighted \\
-    --mlp-input-template "transformer.h.{}.mlp.c_fc" \\
-    --mlp-output-template "transformer.h.{}.mlp.c_proj" \\
-    --activation-dir ./tutorial_activations \\
-    --target-total-tokens 2000000 \\
-    --chunk-token-threshold 1000000 \\
-    --activation_dtype bfloat16 \\
+python scripts/generate_activations.py \
+    --model-name gpt2 \
+    --dataset-path monology/pile-uncopyrighted \
+    --mlp-input-template "transformer.h.{}.mlp.c_fc" \
+    --mlp-output-template "transformer.h.{}.mlp.c_proj" \
+    --activation-dir ./tutorial_activations \
+    --target-total-tokens 2000000 \
+    --chunk-token-threshold 1000000 \
+    --activation_dtype bfloat16 \
     --compute-norm-stats
 ```
 
@@ -94,24 +94,25 @@ Key configuration parameters are mapped to config classes via script arguments:
 This mode requires activations generated beforehand (see previous section).
 
 ```bash
-python scripts/train_clt.py \\
-    --activation-source local_manifest \\
-    --activation-path ./tutorial_activations/gpt2/pile-uncopyrighted_train \\
-    --output-dir ./clt_output_local \\
-    --model-name gpt2 \\
-    --num-features 3072 \\
-    --activation-fn jumprelu \\
+python scripts/train_clt.py \
+    --activation-source local_manifest \
+    --activation-path ./tutorial_activations/gpt2/pile-uncopyrighted_train \
+    --output-dir ./clt_output_local \
+    --model-name gpt2 \
+    --num-features 3072 \
+    --activation-fn jumprelu \
     --learning-rate 3e-4 \\
-    --training-steps 50000 \\
-    --train-batch-size-tokens 4096 \\
-    --sparsity-lambda 1e-3 \\
-    --normalization-method auto \\
-    --log-interval 100 \\
-    --eval-interval 1000 \\
-    --checkpoint-interval 1000 \\
-    --enable-wandb --wandb-project clt-training-local
+    --training-steps 50000 \
+    --train-batch-size-tokens 4096 \
+    --sparsity-lambda 1e-3 \
+    --normalization-method auto \
+    --log-interval 100 \
+    --eval-interval 1000 \
+    --checkpoint-interval 1000 \
+    --enable-wandb --wandb-project clt_training_local
     # Add other arguments as needed
 ```
+
 
 **Example: Training from a Remote Activation Server (`remote`)**
 
@@ -134,7 +135,7 @@ python scripts/train_clt.py \\
     --log-interval 100 \\
     --eval-interval 1000 \\
     --checkpoint-interval 1000 \\
-    --enable-wandb --wandb-project clt-training-remote
+    --enable-wandb --wandb-project clt_training_remote
     # Add other arguments as needed
 ```
 
@@ -153,11 +154,10 @@ Use `torchrun` (or `torch.distributed.launch`) to start the training script on m
 
 **Example: Training on 4 GPUs (Single Node)**
 
-Assume you have 4 GPUs available on the current machine. Use `torchrun --nproc_per_node=4` to launch the script. The command-line arguments passed to `train_clt.py` are the same as for single-GPU training.
 
 ```bash
 # Example using local manifest data on 4 GPUs
-torchrun --nproc_per_node=4 scripts/train_clt.py \
+torchrun --nproc-per-node=4 scripts/train_clt.py \
     --activation-source local_manifest \
     --activation-path ./tutorial_activations/gpt2/pile-uncopyrighted_train \
     --output-dir ./clt_output_local_4gpu \
@@ -172,13 +172,13 @@ torchrun --nproc_per_node=4 scripts/train_clt.py \
     --log-interval 100 \
     --eval-interval 1000 \
     --checkpoint-interval 1000 \
-    --enable-wandb --wandb-project clt-training-local-4gpu
+    --enable-wandb --wandb-project clt_training_local_4gpu
     # Add other arguments as needed
 ```
 
 **Multi-Node Training:**
 Scaling to multiple nodes requires:
-1.  Setting up the `torchrun` command appropriately with `--nnodes`, `--node_rank`, `--rdzv_id`, `--rdzv_backend`, and `--rdzv_endpoint`. See the [torchrun documentation](https://pytorch.org/docs/stable/elastic/run.html).
+1.  Setting up the `torchrun` command appropriately with `--nnodes`, `--node-rank`, `--rdzv-id`, `--rdzv-backend`, and `--rdzv-endpoint`. See the [torchrun documentation](https://pytorch.org/docs/stable/elastic/run.html).
 2.  Ensuring data accessibility for all nodes:
     *   **Local Manifest:** Requires a shared filesystem mounted at the *same path* on all nodes.
     *   **Remote Server:** The activation server URL must be reachable from all training nodes. The central server might become a bottleneck; make sure it is fast and has a good connection.
@@ -186,21 +186,21 @@ Scaling to multiple nodes requires:
 
 ### Resuming Training from a Checkpoint
 
-To resume training from a previously saved checkpoint, use the `--resume_from_checkpoint_dir` argument with the `scripts/train_clt.py` command. The script will attempt to load the latest checkpoint (`clt_checkpoint_latest.safetensors` and `trainer_state_latest.pt` for non-distributed, or the `latest/` directory for distributed runs) from the specified directory.
+To resume training from a previously saved checkpoint, use the `--resume-from-checkpoint-dir` argument with the `scripts/train_clt.py` command. The script will attempt to load the latest checkpoint (`clt_checkpoint_latest.safetensors` and `trainer_state_latest.pt` for non-distributed, or the `latest/` directory for distributed runs) from the specified directory.
 
 **Key aspects of resuming:**
 
-1.  **Configuration Loading**: When resuming, the script will look for `cli_args.json` in the `--resume_from_checkpoint_dir`. If found, it loads the command-line arguments from the original run. You can override certain parameters by providing them in the current command (e.g., extend `--training-steps`). If `cli_args.json` is not found, a warning is issued, and the current command-line arguments are used (you must ensure all necessary configurations are provided).
-2.  **Output Directory**: The `output_dir` for the resumed run will be the same as the `--resume_from_checkpoint_dir`.
+1.  **Configuration Loading**: When resuming, the script will look for `cli_args.json` in the `--resume-from-checkpoint-dir`. If found, it loads the command-line arguments from the original run. You can override certain parameters by providing them in the current command (e.g., extend `--training-steps`). If `cli_args.json` is not found, a warning is issued, and the current command-line arguments are used (you must ensure all necessary configurations are provided).
+2.  **Output Directory**: The `output_dir` for the resumed run will be the same as the `--resume-from-checkpoint-dir`.
 3.  **WandB Resumption**: If the original run used Weights & Biases (WandB) and the WandB run ID was saved in the checkpoint (`trainer_state_latest.pt`), the resumed training will attempt to continue logging to the *same* WandB run. Do **not** specify `--wandb-run-name` when resuming if you want to continue the original run; the ID from the checkpoint will be used.
-4.  **Specific Step**: You can resume from a specific checkpoint step (instead of `latest`) by also providing the `--resume_step <step_number>` argument. For non-distributed runs, it will look for `clt_checkpoint_<step_number>.safetensors`. For distributed runs, it will look for the `step_<step_number>/` directory.
+4.  **Specific Step**: You can resume from a specific checkpoint step (instead of `latest`) by also providing the `--resume-step <step_number>` argument. For non-distributed runs, it will look for `clt_checkpoint_<step_number>.safetensors`. For distributed runs, it will look for the `step_<step_number>/` directory.
 5.  **State Restoration**: The trainer restores the model weights, optimizer state, scheduler state, gradient scaler state, and the state of the data sampler (including RNG states for PyTorch, NumPy, and Python's `random` module). 
 
 **Example: Resuming a Non-Distributed Run**
 
 ```bash
 python scripts/train_clt.py \
-    --resume_from_checkpoint_dir ./clt_output_local \
+    --resume-from-checkpoint-dir ./clt_output_local \
     # Optional: --resume_step 10000 # To resume from step 10000 specifically
     # Optional: --training-steps 60000 # To extend training beyond original steps (this number should be total including past steps)
     # Ensure other necessary args are present if cli_args.json is missing or you need to override them.
@@ -211,8 +211,8 @@ python scripts/train_clt.py \
 **Example: Resuming a Distributed Run (e.g., 4 GPUs)**
 
 ```bash
-torchrun --nproc_per_node=4 scripts/train_clt.py \
-    --resume_from_checkpoint_dir ./clt_output_local_4gpu \
+torchrun --nproc-per-node=4 scripts/train_clt.py \
+    --resume-from-checkpoint-dir ./clt_output_local_4gpu \
     # Optional: --resume_step 10000
     # Optional: --training-steps 60000
     --enable-wandb
@@ -229,11 +229,11 @@ Using half-precision (like float16 or bfloat16) can significantly reduce memory 
 **1. For Activation Generation:**
 
 When generating activation datasets with `scripts/generate_activations.py`:
-*   Use the `--activation_dtype` argument to specify the precision for *storing* the activations. Options include `float16`, `bfloat16`, or `float32` (default).
+*   Use the `--activation-dtype` argument to specify the precision for *storing* the activations. Options include `float16`, `bfloat16`, or `float32` (default).
     ```bash
     python scripts/generate_activations.py \
         # ... other arguments ... \
-        --activation_dtype float16 # or bfloat16
+        --activation-dtype float16 # or bfloat16
     ```
 *   **Benefit**: Storing activations in `float16` or `bfloat16` reduces disk space by roughly half compared to `float32`.
 
@@ -246,12 +246,12 @@ When training a CLT model with `scripts/train_clt.py`:
     *   `fp32`: Standard float32 training (default).
     ```bash
     # Example for bf16 training
-    torchrun --nproc_per_node=<num_gpus> scripts/train_clt.py \
+    torchrun --nproc-per-node=<num_gpus> scripts/train_clt.py \
         # ... other arguments ... \
         --precision bf16
 
     # Example for fp16 training
-    torchrun --nproc_per_node=<num_gpus> scripts/train_clt.py \
+    torchrun --nproc-per-node=<num_gpus> scripts/train_clt.py \
         # ... other arguments ... \
         --precision fp16
     ```
@@ -264,7 +264,7 @@ We strongly recommend using `batchtopk` (or `topk`) as the activation function (
 
 After training, these implicit thresholds can be converted to explicit, fixed per-feature thresholds for a `jumprelu` activation function. This conversion is performed by the `scripts/convert_batchtopk_to_jumprelu.py` script. The process involves:
 1. **Initial Theta Estimation**: The script first estimates initial per-feature thresholds by analyzing the minimum selected pre-activation values of features from the original model over a dataset.
-2. **Layer-wise L0 Calibration (Crucial Step)**: Since the initial conversion might not perfectly replicate the layer-wise L0 sparsity of the original model, an optional but highly recommended calibration step is performed if `--l0_layerwise_calibrate` is set. This step:
+2. **Layer-wise L0 Calibration (Crucial Step)**: Since the initial conversion might not perfectly replicate the layer-wise L0 sparsity of the original model, an optional but highly recommended calibration step is performed if `--l0-layerwise-calibrate` is set. This step:
     - Determines the target L0 norm (average number of active features per token) for each layer from the original BatchTopK/TopK model.
     - Adjusts the per-feature JumpReLU thresholds in the converted model, layer by layer, to match these target L0s. This is done by finding a scaling factor for each layer's thresholds via binary search.
 This calibration helps ensure the converted JumpReLU model closely mimics the sparsity characteristics of the original, better preserving its performance.
@@ -277,25 +277,25 @@ This calibration helps ensure the converted JumpReLU model closely mimics the sp
 *   `--output-config-path`: Path to save the converted JumpReLU model's config.
 *   `--num-batches-for-theta-estimation`: Number of batches to use for initial theta estimation.
 *   `--default-theta_value`: Default threshold for features that never activated during estimation.
-*   `--l0_layerwise_calibrate`: Flag to enable the layer-wise L0 calibration (recommended).
-*   `--l0_calibration_batches`, `--l0_calibration_batch_size_tokens`: Parameters for data used during L0 calibration.
-*   `--l0_target_model_config_path`, `--l0_target_model_checkpoint_path`: Paths to the original model if different from the main input, for deriving L0 targets.
-*   `--l0_calibration_tolerance`, `--l0_calibration_search_min_scale`, `--l0_calibration_search_max_scale`, `--l0_calibration_max_iters`: Control parameters for the layer-wise calibration search.
+*   `--l0-layerwise_calibrate`: Flag to enable the layer-wise L0 calibration (recommended).
+*   `--l0-calibration-batches`, `--l0-calibration-batch-size-tokens`: Parameters for data used during L0 calibration.
+*   `--l0-target-model-config-path`, `--l0-target-model-checkpoint-path`: Paths to the original model if different from the main input, for deriving L0 targets.
+*   `--l0-calibration-tolerance`, `--l0-calibration-search-min-scale`, `--l0-calibration-search-max-scale`, `--l0-calibration-max-iters`: Control parameters for the layer-wise calibration search.
 
 Run `python scripts/convert_batchtopk_to_jumprelu.py --help` for details.
 
 **Example Command:**
 ```bash
-python scripts/convert_batchtopk_to_jumprelu.py \\
-  --batchtopk_checkpoint_path /path/to/your/batchtopk_model_checkpoint_dir \\
-  --config_path /path/to/your/batchtopk_model_config.json \\
-  --activation_data_path /path/to/your/activation_dataset_for_estimation_and_calibration \\
-  --output_model_path /path/to/converted_jumprelu_model.pt \\
-  --output_config_path /path/to/converted_jumprelu_config.json \\
-  --num_batches_for_theta_estimation 100 \\
-  --l0_layerwise_calibrate \\
-  --l0_calibration_batches 10 \\
-  --l0_calibration_tolerance 0.5 # Adjust as needed
+python scripts/convert_batchtopk_to_jumprelu.py \
+  --batchtopk-checkpoint-path /path/to/your/batchtopk_model_checkpoint_dir \
+  --config-path /path/to/your/batchtopk_model_config.json \
+  --activation-data-path /path/to/your/activation_dataset_for_estimation_and_calibration \
+  --output-model-path /path/to/converted_jumprelu_model.pt \
+  --output-config-path /path/to/converted_jumprelu_config.json \
+  --num-batches-for-theta-estimation 100 \
+  --l0-layerwise-calibrate \
+  --l0-calibration-batches 10 \
+  --l0-calibration-tolerance 0.5 # Adjust as needed
 ```
 
 ## Training with a Remote Activation Server
@@ -317,9 +317,9 @@ For detailed instructions on setting up and running the `clt_server`, please ref
 The script `scripts/scramble_dataset.py` can be used to take an existing locally stored dataset (generated by `generate_activations.py`) and create a new version where all activation rows are globally shuffled across all chunks. This is useful if you want to train using random samples from the entire dataset without relying on the `random_chunk` sampling strategy during training.
 
 ```bash
-python scripts/scramble_dataset.py \\
-    --input-dir /path/to/original/dataset \\
-    --output-dir /path/to/scrambled/dataset \\
+python scripts/scramble_dataset.py \
+    --input-dir /path/to/original/dataset \
+    --output-dir /path/to/scrambled/dataset \
     --seed 42 # Optional seed for reproducibility
 ```
 

@@ -47,8 +47,8 @@ def get_model_dimensions(model_name: str) -> tuple[Optional[int], Optional[int]]
 
     try:
         config = AutoConfig.from_pretrained(model_name)
-        num_layers = getattr(config, "num_hidden_layers", None) or getattr(config, "n_layer", None)
-        d_model = getattr(config, "hidden_size", None) or getattr(config, "n_embd", None)
+        num_layers = getattr(config, "num-hidden-layers", None) or getattr(config, "n-layer", None)
+        d_model = getattr(config, "hidden-size", None) or getattr(config, "n-embd", None)
 
         if num_layers is None or d_model is None:
             logger.warning(
@@ -86,7 +86,7 @@ def parse_args():
         "--output-dir",
         type=str,
         default=f"clt_train_{int(time.time())}",
-        help="Directory to save logs, checkpoints, and final model. If resuming, this might be overridden by --resume_from_checkpoint_dir.",
+        help="Directory to save logs, checkpoints, and final model. If resuming, this might be overridden by --resume-from-checkpoint-dir.",
     )
     core_group.add_argument(
         "--model-name",
@@ -106,16 +106,16 @@ def parse_args():
         help="Enable distributed training (requires torchrun/appropriate launcher).",
     )
     core_group.add_argument(
-        "--resume_from_checkpoint_dir",
+        "--resume-from-checkpoint-dir",
         type=str,
         default=None,
-        help="Path to the output directory of a previous run to resume from. Will attempt to load 'latest' or a specific step if --resume_step is also given.",
+        help="Path to the output directory of a previous run to resume from. Will attempt to load 'latest' or a specific step if --resume-step is also given.",
     )
     core_group.add_argument(
-        "--resume_step",
+        "--resume-step",
         type=int,
         default=None,
-        help="Optional specific step to resume from. Used in conjunction with --resume_from_checkpoint_dir.",
+        help="Optional specific step to resume from. Used in conjunction with --resume-from-checkpoint-dir.",
     )
 
     # --- Local Activation Source Parameters ---

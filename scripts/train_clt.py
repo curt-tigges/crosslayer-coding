@@ -274,6 +274,11 @@ def parse_args():
         action="store_true",
         help="Enable skip connection from input to output.",
     )
+    clt_group.add_argument(
+        "--two-stage-batchtopk",
+        action="store_true",
+        help="Enable two-stage BatchTopK optimization for faster training (per-layer pruning followed by global selection).",
+    )
 
     # --- Training Hyperparameters (TrainingConfig) ---
     train_group = parser.add_argument_group("Training Hyperparameters (TrainingConfig)")
@@ -644,6 +649,7 @@ def main():
         enable_feature_scale=args.enable_feature_scale,
         skip_connection=args.skip_connection,
         topk_mode=args.topk_mode,
+        two_stage_batchtopk=args.two_stage_batchtopk,
     )
     logger.info(f"CLT Config: {clt_config}")
 

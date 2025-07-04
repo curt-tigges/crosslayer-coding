@@ -87,11 +87,12 @@ clt_config = CLTConfig(
     num_layers=num_layers,
     d_model=d_model,
     activation_fn="batchtopk",
+    two_stage_batchtopk=True,
     batchtopk_k=batchtopk_k,
     batchtopk_straight_through=True,
     # NEW: Tied decoder configuration
     decoder_tying="per_target",  # Use one decoder per source layer
-    enable_feature_offset=True,  # Enable per-feature bias (feature_offset)
+    enable_feature_offset=False,  # Enable per-feature bias (feature_offset)
     enable_feature_scale=False,  # Enable per-feature scale (feature_scale)
     skip_connection=True,  # Enable skip connection from input to output
 )
@@ -165,7 +166,7 @@ training_config = TrainingConfig(
     train_batch_size_tokens=_batch_size,
     sampling_strategy="sequential",
     # Normalization
-    normalization_method="none",
+    normalization_method="mean_std",
     # Loss function coefficients (same as Tutorial 1B)
     sparsity_lambda=0.0,
     sparsity_lambda_schedule="linear",
@@ -186,7 +187,7 @@ training_config = TrainingConfig(
     dead_feature_window=200,
     # WandB
     enable_wandb=True,
-    wandb_project="clt-debug-pythia-70m",
+    wandb_project="clt-hp-sweeps-pythia-70m",
     wandb_run_name=wdb_run_name,
 )
 

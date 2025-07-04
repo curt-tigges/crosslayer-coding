@@ -7,6 +7,7 @@ from clt.models.base import BaseTranscoder
 
 from clt.models.activations import _apply_batch_topk_helper, _apply_token_topk_helper
 from clt.models.activations_local_global import _apply_batch_topk_local_global
+from clt.models.activations_optimized import _apply_batch_topk_two_stage
 from clt.models.encoder import Encoder
 from clt.models.decoder import Decoder
 from clt.models.theta import ThetaManager
@@ -90,8 +91,13 @@ class CrossLayerTranscoder(BaseTranscoder):
         self,
         preactivations_dict: Dict[int, torch.Tensor],
     ) -> Dict[int, torch.Tensor]:
+        # Use two-stage optimization if enabled
+        if self.config.two_stage_batchtopk:
+            return _apply_batch_topk_two_stage(
+                preactivations_dict, self.config, self.device, self.dtype, self.rank, self.process_group, self.profiler
+            )
         # Use optimized local-global approach for multi-GPU training
-        if self.world_size > 1:
+        elif self.world_size > 1:
             return _apply_batch_topk_local_global(
                 preactivations_dict, self.config, self.device, self.dtype, self.rank, self.process_group, self.profiler
             )
@@ -179,13 +185,14 @@ class CrossLayerTranscoder(BaseTranscoder):
             )
             return torch.zeros((expected_batch_dim, self.config.num_features), device=self.device, dtype=self.dtype)
 
-
-    def decode(self, a: Dict[int, torch.Tensor], layer_idx: int, source_inputs: Optional[Dict[int, torch.Tensor]] = None) -> torch.Tensor:
+    def decode(
+        self, a: Dict[int, torch.Tensor], layer_idx: int, source_inputs: Optional[Dict[int, torch.Tensor]] = None
+    ) -> torch.Tensor:
         return self.decoder_module.decode(a, layer_idx, source_inputs)
 
     def forward(self, inputs: Dict[int, torch.Tensor]) -> Dict[int, torch.Tensor]:
         activations = self.get_feature_activations(inputs)
-        
+
         # Note: feature affine transformations are now applied in the decoder
 
         reconstructions = {}
@@ -193,9 +200,11 @@ class CrossLayerTranscoder(BaseTranscoder):
             relevant_activations = {k: v for k, v in activations.items() if k <= layer_idx and v.numel() > 0}
             if layer_idx in inputs and relevant_activations:
                 # Pass source inputs for EleutherAI-style skip connections
-                source_inputs = {k: inputs[k] for k in range(layer_idx + 1) if k in inputs} if self.config.skip_connection else None
+                source_inputs = (
+                    {k: inputs[k] for k in range(layer_idx + 1) if k in inputs} if self.config.skip_connection else None
+                )
                 reconstruction = self.decode(relevant_activations, layer_idx, source_inputs)
-                
+
                 reconstructions[layer_idx] = reconstruction
             elif layer_idx in inputs:
                 batch_size = 0
@@ -232,7 +241,7 @@ class CrossLayerTranscoder(BaseTranscoder):
                     act = self.encode(x_input, layer_idx)
                     activations[layer_idx] = act
                 return activations
-            
+
             # Otherwise use global top-k
             preactivations_dict, _ = self._encode_all_layers(processed_inputs)
             if not preactivations_dict:
@@ -343,47 +352,47 @@ class CrossLayerTranscoder(BaseTranscoder):
         if not hasattr(self, "theta_manager") or self.theta_manager is None:
             raise AttributeError("ThetaManager is not initialised; cannot set log_threshold.")
         self.theta_manager.log_threshold = new_param
-    
-    def load_state_dict(self, state_dict: Dict[str, torch.Tensor], strict: bool = True):
+
+    def load_state_dict(self, state_dict, strict=True):
         """Load state dict with backward compatibility for old checkpoints.
-        
+
         Handles:
         1. Old untied decoder format -> new tied/untied format
         2. Missing theta_bias/theta_scale parameters
         3. Missing per_target_scale/per_target_bias parameters
         """
         # Check if this is an old checkpoint by looking for decoder keys
-        old_format_decoder_keys = [k for k in state_dict.keys() if 'decoders.' in k and '->' in k]
+        old_format_decoder_keys = [k for k in state_dict.keys() if "decoders." in k and "->" in k]
         is_old_checkpoint = len(old_format_decoder_keys) > 0
-        
+
         if is_old_checkpoint and self.config.decoder_tying == "per_source":
             logger.warning(
                 "Loading old untied decoder checkpoint into tied decoder model. "
                 "This will use weights from the first target layer for each source layer."
             )
-            
+
             # Convert old decoder weights to tied format
             # For each source layer, use the weights from src->src decoder
             new_state_dict = {}
             for key, value in state_dict.items():
-                if 'decoders.' in key and '->' in key:
+                if "decoders." in key and "->" in key:
                     # Extract source and target layer indices
                     # Key format: "decoder_module.decoders.{src}->{tgt}.weight" or ".bias"
-                    parts = key.split('.')
-                    decoder_key_idx = parts.index('decoders') + 1
-                    src_tgt = parts[decoder_key_idx].split('->')
+                    parts = key.split(".")
+                    decoder_key_idx = parts.index("decoders") + 1
+                    src_tgt = parts[decoder_key_idx].split("->")
                     src_layer = int(src_tgt[0])
                     tgt_layer = int(src_tgt[1])
                     param_type = parts[-1]  # 'weight' or 'bias'
-                    
+
                     # Only use diagonal decoders (src->src) for tied architecture
                     if src_layer == tgt_layer:
-                        new_key = '.'.join(parts[:decoder_key_idx] + [str(src_layer), param_type])
+                        new_key = ".".join(parts[:decoder_key_idx] + [str(src_layer), param_type])
                         new_state_dict[new_key] = value
                 else:
                     new_state_dict[key] = value
             state_dict = new_state_dict
-        
+
         # Handle feature affine parameters migration from encoder to decoder module
         # (for backward compatibility with old checkpoints)
         for i in range(self.config.num_layers):
@@ -392,34 +401,42 @@ class CrossLayerTranscoder(BaseTranscoder):
             if old_offset_key in state_dict and new_offset_key not in state_dict:
                 logger.info(f"Migrating {old_offset_key} to {new_offset_key}")
                 state_dict[new_offset_key] = state_dict.pop(old_offset_key)
-                
+
             old_scale_key = f"encoder_module.feature_scale.{i}"
             new_scale_key = f"decoder_module.feature_scale.{i}"
             if old_scale_key in state_dict and new_scale_key not in state_dict:
                 logger.info(f"Migrating {old_scale_key} to {new_scale_key}")
                 state_dict[new_scale_key] = state_dict.pop(old_scale_key)
-        
+
         # Handle missing feature affine parameters (now in decoder module)
-        if self.config.enable_feature_offset and hasattr(self.decoder_module, 'feature_offset') and self.decoder_module.feature_offset is not None:
+        if (
+            self.config.enable_feature_offset
+            and hasattr(self.decoder_module, "feature_offset")
+            and self.decoder_module.feature_offset is not None
+        ):
             for i in range(self.config.num_layers):
                 key = f"decoder_module.feature_offset.{i}"
                 if key not in state_dict:
                     logger.info(f"Initializing missing {key} to zeros")
                     # Don't add to state_dict to let it be initialized by the module
-                    
-        if self.config.enable_feature_scale and hasattr(self.decoder_module, 'feature_scale') and self.decoder_module.feature_scale is not None:
+
+        if (
+            self.config.enable_feature_scale
+            and hasattr(self.decoder_module, "feature_scale")
+            and self.decoder_module.feature_scale is not None
+        ):
             for i in range(self.config.num_layers):
                 key = f"decoder_module.feature_scale.{i}"
                 if key not in state_dict:
                     logger.info(f"Initializing missing {key} (first target layer to ones, rest to zeros)")
                     # Don't add to state_dict to let it be initialized by the module
-        
+
         # Handle missing skip weights
-        if self.config.skip_connection and hasattr(self.decoder_module, 'skip_weights'):
+        if self.config.skip_connection and hasattr(self.decoder_module, "skip_weights"):
             for i in range(self.config.num_layers):
                 key = f"decoder_module.skip_weights.{i}"
                 if key not in state_dict:
                     logger.info(f"Initializing missing {key} to identity matrix")
-        
+
         # Call parent's load_state_dict
         return super().load_state_dict(state_dict, strict=strict)

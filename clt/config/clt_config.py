@@ -29,6 +29,8 @@ class CLTConfig:
     topk_straight_through: bool = True  # Whether to use straight-through estimator for TopK.
     # Top-K mode selection
     topk_mode: Literal["global", "per_layer"] = "global"  # How to apply top-k selection
+    # Two-stage BatchTopK optimization
+    two_stage_batchtopk: bool = False  # Enable two-stage BatchTopK optimization for faster training
     clt_dtype: Optional[str] = None  # Optional dtype for the CLT model itself (e.g., "float16")
     expected_input_dtype: Optional[str] = None  # Expected dtype of input activations
     mlp_input_template: Optional[str] = None  # Module path template for MLP input activations
@@ -36,7 +38,7 @@ class CLTConfig:
     tl_input_template: Optional[str] = None  # TransformerLens hook point pattern before MLP
     tl_output_template: Optional[str] = None  # TransformerLens hook point pattern after MLP
     # context_size: Optional[int] = None
-    
+
     # Tied decoder configuration
     decoder_tying: Literal["none", "per_source", "per_target"] = "none"  # Decoder weight sharing strategy
     enable_feature_offset: bool = False  # Enable per-feature bias (feature_offset)
@@ -68,7 +70,7 @@ class CLTConfig:
                 raise ValueError("topk_k must be specified for TopK activation function.")
             if self.topk_k is not None and self.topk_k <= 0:
                 raise ValueError("topk_k must be positive if specified.")
-        
+
         # Validate decoder tying configuration
         valid_decoder_tying = ["none", "per_source", "per_target"]
         assert (
@@ -87,7 +89,7 @@ class CLTConfig:
         """
         with open(json_path, "r") as f:
             config_dict = json.load(f)
-        
+
         # Handle backward compatibility for old configs
         if "decoder_tying" not in config_dict:
             config_dict["decoder_tying"] = "none"  # Default to original behavior
@@ -95,7 +97,7 @@ class CLTConfig:
             config_dict["enable_feature_offset"] = False
         if "enable_feature_scale" not in config_dict:
             config_dict["enable_feature_scale"] = False
-        
+
         # Handle backwards compatibility for old normalization methods
         if "normalization_method" in config_dict:
             old_method = config_dict["normalization_method"]
@@ -104,13 +106,13 @@ class CLTConfig:
                 config_dict["normalization_method"] = "mean_std"
             elif old_method in ["auto_sqrt_d_model", "estimated_mean_std_sqrt_d_model"]:
                 config_dict["normalization_method"] = "sqrt_d_model"
-        
+
         # Handle old sqrt_d_model_normalize flag
         if "sqrt_d_model_normalize" in config_dict:
             sqrt_normalize = config_dict.pop("sqrt_d_model_normalize")
             if sqrt_normalize:
                 config_dict["normalization_method"] = "sqrt_d_model"
-            
+
         return cls(**config_dict)
 
     def to_json(self, json_path: str) -> None:
@@ -183,7 +185,9 @@ class TrainingConfig:
     optimizer_beta1: Optional[float] = None  # Beta1 for Adam/AdamW (default: 0.9)
     optimizer_beta2: Optional[float] = None  # Beta2 for Adam/AdamW (default: 0.999)
     optimizer_states_dtype: Literal["fp32", "model_dtype"] = "model_dtype"  # Dtype for optimizer states
-    enable_stochastic_rounding: bool = False  # Enable stochastic rounding for bf16 (requires optimizer_states_dtype="fp32")
+    enable_stochastic_rounding: bool = (
+        False  # Enable stochastic rounding for bf16 (requires optimizer_states_dtype="fp32")
+    )
     # Learning rate scheduler type. "linear_final20" keeps LR constant for the first 80% of
     # training and then linearly decays it to 0 for the final 20% (configurable via lr_scheduler_params).
     lr_scheduler: Optional[Literal["linear", "cosine", "linear_final20"]] = "linear"
@@ -198,7 +202,7 @@ class TrainingConfig:
 
     # Optional diagnostic metrics (can be slow)
     compute_sparsity_diagnostics: bool = False  # Whether to compute detailed sparsity diagnostics during eval
-    
+
     # Performance profiling
     enable_profiling: bool = False  # Whether to enable detailed performance profiling
 
@@ -261,7 +265,7 @@ class TrainingConfig:
             assert (
                 0.0 <= self.sparsity_lambda_delay_frac < 1.0
             ), "sparsity_lambda_delay_frac must be between 0.0 (inclusive) and 1.0 (exclusive)"
-        
+
         # Validate normalization method
         valid_norm_methods = ["none", "mean_std", "sqrt_d_model"]
         assert (

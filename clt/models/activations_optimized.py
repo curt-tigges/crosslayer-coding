@@ -326,3 +326,194 @@ class TwoStageBatchTopK(torch.autograd.Function):
         else:
             # No gradients if not using STE
             return ({idx: torch.zeros_like(g) for idx, g in grad_outputs_dict.items()}, None, None, None)
+
+
+def _apply_token_topk_two_stage(
+    preactivations_dict: Dict[int, torch.Tensor],
+    config: CLTConfig,
+    device: torch.device,
+    dtype: torch.dtype,
+    rank: int,
+    process_group: Optional[ProcessGroup],
+    profiler: Optional[Any] = None,
+    oversample_factor: float = 2.0,
+) -> Dict[int, torch.Tensor]:
+    """Two-stage TokenTopK: per-layer pruning followed by global per-token selection.
+
+    This implementation:
+    1. Applies per-layer token-wise top-k to reduce candidates (stage 1)
+    2. Concatenates pruned activations and applies global token-wise top-k (stage 2)
+    3. Uses normalized values for ranking but preserves original values
+
+    Args:
+        oversample_factor: How many times k to keep in stage 1 (default 2.0)
+    """
+
+    world_size = dist_ops.get_world_size(process_group)
+
+    if not preactivations_dict:
+        logger.warning(f"Rank {rank}: _apply_token_topk_two_stage received empty preactivations_dict.")
+        return {}
+
+    # Get batch dimension and k value
+    first_valid_preact = next((p for p in preactivations_dict.values() if p.numel() > 0), None)
+    if first_valid_preact is None:
+        logger.warning(f"Rank {rank}: No valid preactivations found in dict for TokenTopK. Returning empty dict.")
+        return {
+            layer_idx: torch.empty((0, config.num_features), device=device, dtype=dtype)
+            for layer_idx in preactivations_dict.keys()
+        }
+    batch_tokens_dim = first_valid_preact.shape[0]
+
+    # Determine k value
+    k_val_float: float
+    if hasattr(config, "topk_k") and config.topk_k is not None:
+        k_val_float = float(config.topk_k)
+    else:
+        # Default to keeping all features
+        k_val_float = float(config.num_features * config.num_layers)
+
+    # Stage 1: Per-layer token-wise pruning
+    k_stage1 = int(k_val_float * oversample_factor)
+
+    pruned_preactivations: List[torch.Tensor] = []
+    pruned_indices_info: List[Tuple[int, torch.Tensor]] = []  # (layer_idx, indices_within_layer)
+    layer_feature_offsets: Dict[int, int] = {}
+    current_offset = 0
+
+    if profiler:
+        stage1_timer = profiler.timer("tokentopk_stage1_per_layer")
+        stage1_timer.__enter__()
+
+    try:
+        for layer_idx in range(config.num_layers):
+            if layer_idx not in preactivations_dict:
+                continue
+
+            preact_orig = preactivations_dict[layer_idx].to(device=device, dtype=dtype)
+            if preact_orig.numel() == 0 or preact_orig.shape[0] != batch_tokens_dim:
+                continue
+
+            current_num_features = preact_orig.shape[1]
+
+            # Normalize for ranking
+            mean = preact_orig.mean(dim=0, keepdim=True)
+            std = preact_orig.std(dim=0, keepdim=True)
+            preact_norm = (preact_orig - mean) / (std + 1e-6)
+
+            # Apply per-layer token-wise top-k
+            k_this_layer = min(k_stage1, current_num_features)
+            if k_this_layer > 0:
+                # Get top-k per token within this layer
+                topk_values_norm, topk_indices = torch.topk(preact_norm, k_this_layer, dim=-1, sorted=False)
+
+                # Gather the original values using advanced indexing
+                batch_indices = torch.arange(batch_tokens_dim, device=device).unsqueeze(1).expand(-1, k_this_layer)
+                topk_values_orig = preact_orig[batch_indices, topk_indices]
+
+                # Flatten and store
+                pruned_preactivations.append(topk_values_orig.reshape(-1, k_this_layer))
+                pruned_indices_info.append((layer_idx, topk_indices))
+                layer_feature_offsets[layer_idx] = current_offset
+                current_offset += k_this_layer
+
+    finally:
+        if profiler and hasattr(stage1_timer, "__exit__"):
+            stage1_timer.__exit__(None, None, None)
+            if hasattr(stage1_timer, "elapsed"):
+                profiler.record("tokentopk_stage1_per_layer", stage1_timer.elapsed)
+
+    if not pruned_preactivations:
+        logger.warning(f"Rank {rank}: No tensors collected after stage 1. Returning empty activations.")
+        return {
+            layer_idx: torch.empty((batch_tokens_dim, config.num_features), device=device, dtype=dtype)
+            for layer_idx in preactivations_dict.keys()
+        }
+
+    # Concatenate pruned activations (shape: [batch_tokens, total_pruned_features])
+    concatenated_pruned = torch.cat(pruned_preactivations, dim=1)
+
+    # Stage 2: Global token-wise top-k on pruned candidates
+    if profiler:
+        stage2_timer = profiler.timer("tokentopk_stage2_global")
+        stage2_timer.__enter__()
+
+    try:
+        # Determine final k
+        final_k = int(k_val_float) if k_val_float >= 1 else int(k_val_float * concatenated_pruned.shape[1])
+        final_k = min(final_k, concatenated_pruned.shape[1])
+
+        if world_size > 1:
+            # Distributed: only rank 0 computes, then broadcasts
+            if rank == 0:
+                # Apply global token-wise top-k
+                _, global_topk_indices = torch.topk(concatenated_pruned, final_k, dim=-1, sorted=False)
+            else:
+                global_topk_indices = torch.empty((batch_tokens_dim, final_k), dtype=torch.long, device=device)
+
+            # Broadcast the selected indices
+            if hasattr(profiler, "dist_profiler") and profiler.dist_profiler:
+                with profiler.dist_profiler.profile_op("tokentopk_broadcast_indices"):
+                    dist_ops.broadcast(global_topk_indices, src=0, group=process_group)
+            else:
+                dist_ops.broadcast(global_topk_indices, src=0, group=process_group)
+        else:
+            # Single GPU: direct computation
+            _, global_topk_indices = torch.topk(concatenated_pruned, final_k, dim=-1, sorted=False)
+
+    finally:
+        if profiler and hasattr(stage2_timer, "__exit__"):
+            stage2_timer.__exit__(None, None, None)
+            if hasattr(stage2_timer, "elapsed"):
+                profiler.record("tokentopk_stage2_global", stage2_timer.elapsed)
+
+    # Reconstruct activations
+    if profiler:
+        reconstruct_timer = profiler.timer("tokentopk_reconstruct")
+        reconstruct_timer.__enter__()
+
+    try:
+        activations_dict: Dict[int, torch.Tensor] = {}
+
+        # Map global indices back to original layer positions
+        for layer_idx, (_, stage1_indices) in enumerate(pruned_indices_info):
+            layer_id = pruned_indices_info[layer_idx][0]
+            original_preact = preactivations_dict[layer_id]
+
+            # Create output tensor for this layer
+            activated = torch.zeros_like(original_preact)
+
+            # Find which global indices correspond to this layer
+            layer_offset = layer_feature_offsets[layer_id]
+            layer_k = stage1_indices.shape[1]
+
+            # For each token, check which of its selected features are in this layer
+            for token_idx in range(batch_tokens_dim):
+                token_global_indices = global_topk_indices[token_idx]
+
+                # Find indices that fall within this layer's range
+                mask = (token_global_indices >= layer_offset) & (token_global_indices < layer_offset + layer_k)
+                if mask.any():
+                    # Map back to original feature indices
+                    local_indices = token_global_indices[mask] - layer_offset
+                    original_feature_indices = stage1_indices[token_idx, local_indices]
+
+                    # Set the activated values
+                    activated[token_idx, original_feature_indices] = original_preact[
+                        token_idx, original_feature_indices
+                    ]
+
+            activations_dict[layer_id] = activated
+
+        # Fill in any missing layers with zeros
+        for layer_idx in preactivations_dict:
+            if layer_idx not in activations_dict:
+                activations_dict[layer_idx] = torch.zeros_like(preactivations_dict[layer_idx])
+
+    finally:
+        if profiler and hasattr(reconstruct_timer, "__exit__"):
+            reconstruct_timer.__exit__(None, None, None)
+            if hasattr(reconstruct_timer, "elapsed"):
+                profiler.record("tokentopk_reconstruct", reconstruct_timer.elapsed)
+
+    return activations_dict

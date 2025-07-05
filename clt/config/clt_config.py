@@ -31,6 +31,8 @@ class CLTConfig:
     topk_mode: Literal["global", "per_layer"] = "global"  # How to apply top-k selection
     # Two-stage BatchTopK optimization
     two_stage_batchtopk: bool = False  # Enable two-stage BatchTopK optimization for faster training
+    # Two-stage TokenTopK optimization
+    two_stage_topk: bool = False  # Enable two-stage TokenTopK optimization for faster training
     clt_dtype: Optional[str] = None  # Optional dtype for the CLT model itself (e.g., "float16")
     expected_input_dtype: Optional[str] = None  # Expected dtype of input activations
     mlp_input_template: Optional[str] = None  # Module path template for MLP input activations

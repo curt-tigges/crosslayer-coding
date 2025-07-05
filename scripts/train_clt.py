@@ -279,6 +279,11 @@ def parse_args():
         action="store_true",
         help="Enable two-stage BatchTopK optimization for faster training (per-layer pruning followed by global selection).",
     )
+    clt_group.add_argument(
+        "--two-stage-topk",
+        action="store_true",
+        help="Enable two-stage TokenTopK optimization for faster training (per-layer pruning followed by global selection).",
+    )
 
     # --- Training Hyperparameters (TrainingConfig) ---
     train_group = parser.add_argument_group("Training Hyperparameters (TrainingConfig)")
@@ -650,6 +655,7 @@ def main():
         skip_connection=args.skip_connection,
         topk_mode=args.topk_mode,
         two_stage_batchtopk=args.two_stage_batchtopk,
+        two_stage_topk=args.two_stage_topk,
     )
     logger.info(f"CLT Config: {clt_config}")
 

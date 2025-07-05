@@ -1,13 +1,13 @@
 # %% [markdown]
-# # Tutorial 2: End-to-End CLT Training with TopK Activation
+# # Tutorial: End-to-End CLT Training with Layerwise Token TopK
 #
 # This tutorial demonstrates training a Cross-Layer Transcoder (CLT)
-# using the **TopK** activation function. We will:
-# 1. Configure the CLT model for TopK, activation generation, and training parameters.
+# using the **Layerwise Token TopK** activation function. We will:
+# 1. Configure the CLT model for per-layer TopK with tied decoders and skip connections.
 # 2. Generate activations locally (with manifest) using the ActivationGenerator.
 # 3. Configure the trainer to use the locally stored activations via the manifest.
-# 4. Train the CLT model using TopK activation.
-# 5. Save and load the final trained model (which will be a TopK model).
+# 4. Train the CLT model using layerwise TopK activation.
+# 5. Save and load the final trained model.
 
 # %% [markdown]
 # ## 1. Imports and Setup
@@ -73,19 +73,23 @@ d_model = 512
 expansion_factor = 32
 clt_num_features = d_model * expansion_factor
 
-topk_k_val = 200  # Can be a float for fraction or int for count
+topk_k_val = 33  # Per-layer k for layerwise mode (typical value)
 
 clt_config = CLTConfig(
     num_features=clt_num_features,
     num_layers=num_layers,
     d_model=d_model,
-    activation_fn="topk",  # Use TopK activation
+    activation_fn="topk",  # Use Token TopK activation
     topk_k=topk_k_val,  # Specify k for TopK
     topk_straight_through=True,  # Use STE for gradients
-    # jumprelu_threshold is not used for topk
+    topk_mode="per_layer",  # Enable per-layer mode
 )
-print("CLT Configuration (TopK):")
+print("CLT Configuration (Layerwise Token TopK):")
 print(clt_config)
+print(f"- topk_mode: {clt_config.topk_mode}")
+print(f"- topk_k per layer: {clt_config.topk_k}")
+print(f"- decoder_tying: {clt_config.decoder_tying}")
+print(f"- skip_connection: {clt_config.skip_connection}")
 
 # --- Activation Generation Configuration ---
 # Same as before - generate activations to train on
@@ -142,7 +146,9 @@ _k_val_for_name = clt_config.topk_k  # Use topk_k for name
 
 wdb_run_name = (
     f"{clt_config.num_features}-width-"
-    f"topk-k{_k_val_for_name}-"  # Indicate TopK and k
+    f"layerwise-topk-k{_k_val_for_name}-"  # Indicate Layerwise TopK and k
+    f"tied-decoders-"  # Indicate tied decoder architecture
+    f"skip-conn-"  # Indicate skip connections
     f"{_batch_size}-batch-"
     f"{_lr:.1e}-lr"
 )
@@ -161,11 +167,11 @@ training_config = TrainingConfig(
     train_batch_size_tokens=_batch_size,
     sampling_strategy="sequential",
     # Normalization
-    normalization_method="auto",  # Use pre-calculated stats
+    normalization_method="mean_std",  # EleutherAI-style normalization (from 1F)
     # Loss function coefficients
-    sparsity_lambda=0.0,  # Standard sparsity penalty (adjust as needed for TopK)
+    sparsity_lambda=0.0,  # No sparsity penalty for TopK
     sparsity_lambda_schedule="linear",
-    sparsity_c=0.0,  # Standard sparsity penalty (adjust as needed for TopK)
+    sparsity_c=0.0,  # No sparsity penalty for TopK
     preactivation_coef=0,
     aux_loss_factor=1 / 32,  # Enable AuxK loss with typical factor from paper
     # Optimizer & Scheduler
@@ -181,10 +187,10 @@ training_config = TrainingConfig(
     dead_feature_window=200,
     # WandB (Optional)
     enable_wandb=True,
-    wandb_project="clt-hp-sweeps-pythia-70m",
+    wandb_project="clt-hp-sweeps-pythia-70m",  # Same project as 1F
     wandb_run_name=wdb_run_name,
 )
-print("\nTraining Configuration (TopK):")
+print("\nTraining Configuration (Layerwise Token TopK):")
 print(training_config)
 
 
@@ -220,23 +226,23 @@ else:
         raise
 
 # %% [markdown]
-# ## 4. Training the CLT with TopK Activation
+# ## 4. Training the CLT with Layerwise Token TopK Activation
 #
 # Instantiate the `CLTTrainer` using the configurations defined above.
 # The trainer will use the `LocalActivationStore` (driven by the manifest) and the CLT model
-# will use the TopK activation function internally based on `clt_config`.
+# will use the Layerwise Token TopK activation function internally based on `clt_config`.
 
 # %%
-print("Initializing CLTTrainer for training with TopK...")
+print("Initializing CLTTrainer for training with Layerwise Token TopK...")
 
-log_dir = f"clt_training_logs/clt_pythia_topk_train_{int(time.time())}"
+log_dir = f"clt_training_logs/clt_pythia_layerwise_topk_{int(time.time())}"
 os.makedirs(log_dir, exist_ok=True)
 print(f"Logs and checkpoints will be saved to: {log_dir}")
 
 try:
     print("Creating CLTTrainer instance...")
     print(f"- Using device: {device}")
-    print(f"- CLT config (TopK): {vars(clt_config)}")
+    print(f"- CLT config (Layerwise Token TopK): {vars(clt_config)}")
     print(f"- Activation Source: {training_config.activation_source}")
     print(f"- Reading activations from: {training_config.activation_path}")
 
@@ -254,9 +260,10 @@ except Exception as e:
     raise
 
 # Start training
-print("Beginning training using TopK activation...")
+print("Beginning training using Layerwise Token TopK activation...")
 print(f"Training for {training_config.training_steps} steps.")
 print(f"Normalization method set to: {training_config.normalization_method}")
+print(f"TopK mode: {clt_config.topk_mode} with k={clt_config.topk_k} per layer")
 
 try:
     start_train_time = time.time()
@@ -274,9 +281,8 @@ except Exception as train_err:
 # The `CLTTrainer` automatically saves the final model and its configuration (cfg.json)
 # in the `log_dir/final/` directory. Unlike BatchTopK, TopK models are typically
 # not converted to JumpReLU by the trainer at the end of training.
-# Here, we'll also demonstrate a manual save of the model state and its config as Python dict,
-# and then load it back. This manually saved model will be the one returned by trainer.train(),
-# so it will be a TopK model.
+# Here, we'll also demonstrate a manual save of the model state and its config,
+# including the tied decoder architecture and layerwise settings.
 
 # %%
 # The trained_clt_model is what trainer.train() returned.
@@ -320,38 +326,49 @@ print(f"Loaded model is on device: {next(loaded_clt_model_manual.parameters()).d
 
 
 # %% [markdown]
-# ## 6. Next Steps
+# ## 6. Model Architecture Inspection
 #
-# This tutorial showed how to train a CLT using the token-wise TopK activation
-# and save/load the trained TopK model.
+# Let's inspect the trained model to verify the layerwise TopK and tied decoder architecture.
 
 # %%
-print("\nTopK Tutorial Complete!")
+print("\nModel architecture inspection:")
+print(f"- Activation function: {trained_clt_model.config.activation_fn}")
+print(f"- TopK mode: {trained_clt_model.config.topk_mode}")
+print(f"- TopK k per layer: {trained_clt_model.config.topk_k}")
+print(f"- Decoder tying: {trained_clt_model.config.decoder_tying}")
+print(f"- Skip connections: {trained_clt_model.config.skip_connection}")
+
+# Count parameters
+total_params = sum(p.numel() for p in trained_clt_model.parameters())
+encoder_params = sum(p.numel() for p in trained_clt_model.encoder_module.parameters())
+decoder_params = sum(p.numel() for p in trained_clt_model.decoder_module.parameters())
+print(f"\nParameter counts:")
+print(f"- Total parameters: {total_params:,}")
+print(f"- Encoder parameters: {encoder_params:,}")
+print(f"- Decoder parameters: {decoder_params:,}")
+
+# Calculate memory savings vs untied
+untied_decoders = sum(range(1, num_layers + 1))  # 6 + 5 + 4 + 3 + 2 + 1 = 21
+tied_decoders = num_layers  # 6
+print(f"\nMemory savings vs untied architecture:")
+print(f"- Untied would have: {untied_decoders} decoder matrices")
+print(f"- Tied has: {tied_decoders} decoder matrices")
+print(f"- Reduction: {(1 - tied_decoders / untied_decoders) * 100:.1f}%")
+
+# %% [markdown]
+# ## 7. Next Steps
+#
+# This tutorial demonstrated:
+# - Training a CLT using **layerwise** Token TopK activation
+# - Using tied decoder architecture for memory efficiency
+# - EleutherAI-style sqrt(d_model) normalization
+# - Skip connections for improved reconstruction
+#
+# Key differences from global TopK:
+# - Each layer independently selects its top k features per token
+# - More consistent sparsity across layers
+# - Typical k values are much smaller (16 vs 200)
+
+# %%
+print("\nLayerwise Token TopK Tutorial Complete!")
 print(f"Logs and checkpoints will be saved to: {log_dir}")
-
-# %%
-# The following cells for loading a specific BatchTopK checkpoint are removed
-# as they are not relevant to this TopK tutorial and the section was cut.
-# weights = torch.load(batchtopk_checkpoint_path)
-
-# %%
-# weights.keys()
-# %%
-import torch
-
-checkpoint_path = (
-    "clt_training_logs/clt_pythia_topk_train_1747350938/trainer_state_latest.pt"  # Or the specific step's file
-)
-# checkpoint_path = "tutorials/clt_training_logs/clt_pythia_topk_train_1747350938/step_X/trainer_state.pt" # For distributed
-try:
-    data = torch.load(checkpoint_path, map_location="cpu")
-    print(data.keys())
-    if "wandb_run_id" in data:
-        print(f"WandB Run ID found: {data['wandb_run_id']}")
-    else:
-        print("WandB Run ID NOT found in checkpoint.")
-except FileNotFoundError:
-    print(f"Checkpoint file not found: {checkpoint_path}")
-except Exception as e:
-    print(f"Error loading checkpoint: {e}")
-# %%

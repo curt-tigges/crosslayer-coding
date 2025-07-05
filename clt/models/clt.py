@@ -5,7 +5,12 @@ import logging
 from clt.config import CLTConfig
 from clt.models.base import BaseTranscoder
 
-from clt.models.activations import _apply_batch_topk_helper, _apply_token_topk_helper
+from clt.models.activations import (
+    _apply_batch_topk_helper,
+    _apply_token_topk_helper,
+    BatchTopK,
+    TokenTopK,
+)
 from clt.models.activations_local_global import _apply_batch_topk_local_global
 from clt.models.activations_optimized import _apply_batch_topk_two_stage
 from clt.models.encoder import Encoder
@@ -143,6 +148,28 @@ class CrossLayerTranscoder(BaseTranscoder):
                 elif self.config.activation_fn == "relu":
                     activation_fn_callable = get_activation_fn("relu")  # Standard ReLU from registry
                     activated = activation_fn_callable(self, preact, layer_idx)  # Corrected signature
+                elif self.config.activation_fn == "batchtopk" and self.config.topk_mode == "per_layer":
+                    # Apply BatchTopK independently on this layer
+                    if self.config.batchtopk_k is None or self.config.batchtopk_k <= 0:
+                        raise ValueError("batchtopk_k must be a positive integer for per-layer BatchTopK.")
+                    k_int = int(self.config.batchtopk_k)
+                    # Normalize for ranking (matching global mode behavior)
+                    mean = preact.mean(dim=0, keepdim=True)
+                    std = preact.std(dim=0, keepdim=True)
+                    preact_normalized = (preact - mean) / (std + 1e-6)
+                    activated = BatchTopK.apply(
+                        preact, k_int, self.config.batchtopk_straight_through, preact_normalized
+                    )
+                elif self.config.activation_fn == "topk" and self.config.topk_mode == "per_layer":
+                    # Apply TokenTopK independently on this layer
+                    if self.config.topk_k is None or self.config.topk_k <= 0:
+                        raise ValueError("topk_k must be set (>0 or fraction) for per-layer TokenTopK.")
+                    k_float = float(self.config.topk_k)
+                    # Normalize for ranking (matching global mode behavior)
+                    mean = preact.mean(dim=0, keepdim=True)
+                    std = preact.std(dim=0, keepdim=True)
+                    preact_normalized = (preact - mean) / (std + 1e-6)
+                    activated = TokenTopK.apply(preact, k_float, self.config.topk_straight_through, preact_normalized)
                 else:
                     # This path should ideally not be taken if BatchTopK/TokenTopK are handled elsewhere.
                     # If other activation functions are added that fit this per-layer, per-token model,

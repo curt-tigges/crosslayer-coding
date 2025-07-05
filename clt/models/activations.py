@@ -312,21 +312,21 @@ def _apply_batch_topk_helper(
                     local_mask = BatchTopK._compute_mask(
                         concatenated_preactivations_original, k_val, concatenated_preactivations_normalized
                     )
-                if hasattr(timer, 'elapsed'):
+                if hasattr(timer, "elapsed"):
                     profiler.record("batchtopk_compute_mask", timer.elapsed)
             else:
                 local_mask = BatchTopK._compute_mask(
                     concatenated_preactivations_original, k_val, concatenated_preactivations_normalized
                 )
             mask.copy_(local_mask)
-            
-            if hasattr(profiler, 'dist_profiler') and profiler.dist_profiler:
+
+            if hasattr(profiler, "dist_profiler") and profiler.dist_profiler:
                 with profiler.dist_profiler.profile_op("batchtopk_broadcast"):
                     dist_ops.broadcast(mask, src=0, group=process_group)
             else:
                 dist_ops.broadcast(mask, src=0, group=process_group)
         else:
-            if hasattr(profiler, 'dist_profiler') and profiler.dist_profiler:
+            if hasattr(profiler, "dist_profiler") and profiler.dist_profiler:
                 with profiler.dist_profiler.profile_op("batchtopk_broadcast"):
                     dist_ops.broadcast(mask, src=0, group=process_group)
             else:
@@ -337,7 +337,7 @@ def _apply_batch_topk_helper(
                 mask = BatchTopK._compute_mask(
                     concatenated_preactivations_original, k_val, concatenated_preactivations_normalized
                 )
-            if hasattr(timer, 'elapsed'):
+            if hasattr(timer, "elapsed"):
                 profiler.record("batchtopk_compute_mask", timer.elapsed)
         else:
             mask = BatchTopK._compute_mask(
@@ -444,7 +444,7 @@ def _apply_token_topk_helper(
                         k_val_float,
                         concatenated_preactivations_normalized,
                     )
-                if hasattr(timer, 'elapsed'):
+                if hasattr(timer, "elapsed"):
                     profiler.record("topk_compute_mask", timer.elapsed)
             else:
                 local_mask = TokenTopK._compute_mask(
@@ -453,14 +453,14 @@ def _apply_token_topk_helper(
                     concatenated_preactivations_normalized,
                 )
             mask.copy_(local_mask)
-            
-            if hasattr(profiler, 'dist_profiler') and profiler.dist_profiler:
+
+            if hasattr(profiler, "dist_profiler") and profiler.dist_profiler:
                 with profiler.dist_profiler.profile_op("topk_broadcast"):
                     dist_ops.broadcast(mask, src=0, group=process_group)
             else:
                 dist_ops.broadcast(mask, src=0, group=process_group)
         else:
-            if hasattr(profiler, 'dist_profiler') and profiler.dist_profiler:
+            if hasattr(profiler, "dist_profiler") and profiler.dist_profiler:
                 with profiler.dist_profiler.profile_op("topk_broadcast"):
                     dist_ops.broadcast(mask, src=0, group=process_group)
             else:
@@ -471,7 +471,7 @@ def _apply_token_topk_helper(
                 mask = TokenTopK._compute_mask(
                     concatenated_preactivations_original, k_val_float, concatenated_preactivations_normalized
                 )
-            if hasattr(timer, 'elapsed'):
+            if hasattr(timer, "elapsed"):
                 profiler.record("topk_compute_mask", timer.elapsed)
         else:
             mask = TokenTopK._compute_mask(

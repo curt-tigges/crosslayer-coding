@@ -23,6 +23,7 @@ import os
 import time
 import sys
 import traceback
+from transformers import AutoModelForCausalLM
 
 # Import components from the clt library
 # (Ensure the 'clt' directory is in your Python path or installed)
@@ -63,7 +64,6 @@ print(f"Using device: {device}")
 # Base model for activation extraction
 BASE_MODEL_NAME = "gpt2"  # Using GPT-2 small
 # %%
-from transformers import AutoModelForCausalLM
 
 model = AutoModelForCausalLM.from_pretrained(BASE_MODEL_NAME)
 
@@ -96,11 +96,8 @@ clt_config = CLTConfig(
     num_features=clt_num_features,
     num_layers=gpt2_num_layers,  # Must match the base model
     d_model=gpt2_d_model,  # Must match the base model
-    activation_fn="batchtopk",  # As described in the paper
-    batchtopk_k=200,  # Specify k or frac
-    batchtopk_straight_through=True,  # Use STE for gradients
+    activation_fn="relu",  # Using simple ReLU activation
     clt_dtype="float32",
-    # jumprelu_threshold=0.2
 )
 print("CLT Configuration:")
 print(clt_config)
@@ -163,6 +160,7 @@ _sparsity_lambda = 0.0001
 _sparsity_c = 0.1
 
 wdb_run_name = (
+    f"{clt_config.activation_fn}-"
     f"{clt_config.num_features}-width-"
     f"{_batch_size}-batch-"
     f"{_lr:.1e}-lr-"
@@ -184,7 +182,7 @@ training_config = TrainingConfig(
     train_batch_size_tokens=_batch_size,
     sampling_strategy="sequential",
     # Normalization for training (use stored stats)
-    normalization_method="auto",  # Use stats from norm_stats.json generated earlier
+    normalization_method="mean_std",  # Use stats from norm_stats.json generated earlier
     # Loss function coefficients
     sparsity_lambda=0,
     sparsity_lambda_schedule="linear",
@@ -192,7 +190,6 @@ training_config = TrainingConfig(
     sparsity_c=0,
     preactivation_coef=0,
     aux_loss_factor=1 / 32,  # Enable AuxK loss with typical factor from paper
-    apply_sparsity_penalty_to_batchtopk=False,  # Ensure standard sparsity penalty is off for BatchTopK
     # Optimizer & Scheduler
     optimizer="adamw",
     lr_scheduler="linear_final20",
@@ -343,7 +340,6 @@ loaded_clt_config = CLTConfig(
     num_layers=clt_config.num_layers,
     d_model=clt_config.d_model,
     activation_fn=clt_config.activation_fn,
-    jumprelu_threshold=clt_config.jumprelu_threshold,
 )
 
 # 2. Load the model structure and state dict

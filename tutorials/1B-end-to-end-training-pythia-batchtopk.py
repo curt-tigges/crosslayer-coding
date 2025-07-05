@@ -86,7 +86,7 @@ d_model = 512
 expansion_factor = 32
 clt_num_features = d_model * expansion_factor
 
-batchtopk_k = 200
+batchtopk_k = 33
 
 clt_config = CLTConfig(
     num_features=clt_num_features,
@@ -95,7 +95,7 @@ clt_config = CLTConfig(
     activation_fn="batchtopk",  # Use BatchTopK activation
     batchtopk_k=batchtopk_k,  # Specify k directly
     batchtopk_straight_through=True,  # Use STE for gradients
-    # jumprelu_threshold is not used for batchtopk
+    topk_mode="per_layer",  # Enable per-layer mode
 )
 print("CLT Configuration (BatchTopK):")
 print(clt_config)

@@ -56,10 +56,11 @@ def _remap_checkpoint_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, tor
     keys_to_check = list(new_state_dict.keys())
     for key in keys_to_check:
         # Handle feature_offset/feature_scale that might be saved without module prefix
-        if key.startswith("feature_offset.") and not key.startswith("encoder_module."):
-            new_state_dict[f"encoder_module.{key}"] = new_state_dict.pop(key)
-        elif key.startswith("feature_scale.") and not key.startswith("encoder_module."):
-            new_state_dict[f"encoder_module.{key}"] = new_state_dict.pop(key)
+        # Note: These are now in the decoder module for tied decoders
+        if key.startswith("feature_offset.") and not key.startswith("decoder_module.") and not key.startswith("encoder_module."):
+            new_state_dict[f"decoder_module.{key}"] = new_state_dict.pop(key)
+        elif key.startswith("feature_scale.") and not key.startswith("decoder_module.") and not key.startswith("encoder_module."):
+            new_state_dict[f"decoder_module.{key}"] = new_state_dict.pop(key)
         # Handle skip_weights that might be saved without module prefix
         elif key.startswith("skip_weights.") and not key.startswith("decoder_module."):
             new_state_dict[f"decoder_module.{key}"] = new_state_dict.pop(key)
@@ -85,6 +86,26 @@ def _remap_checkpoint_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, tor
         # For now, returning the partially remapped dict and letting load_state_dict fail might be more informative.
 
     return new_state_dict
+
+
+def print_performance_metrics(stage_name: str, nmse: float, ev: float, l0_total: float = None, l0_per_layer: Dict[int, float] = None):
+    """Print performance metrics in a standardized, prominent format."""
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info(f"PERFORMANCE METRICS - {stage_name.upper()}")
+    logger.info("=" * 80)
+    logger.info(f"NMSE (Normalized Mean Squared Error): {nmse:.6f}")
+    logger.info(f"EV (Explained Variance):              {ev:.6f}")
+    if l0_total is not None:
+        logger.info(f"L0 (Total across all layers):         {l0_total:.2f}")
+    if l0_per_layer is not None:
+        logger.info("L0 per layer:")
+        for layer_idx in sorted(l0_per_layer.keys()):
+            l0_val = l0_per_layer[layer_idx]
+            if not math.isnan(l0_val):
+                logger.info(f"  Layer {layer_idx}: {l0_val:.2f}")
+    logger.info("=" * 80)
+    logger.info("")
 
 
 def main(args):
@@ -117,6 +138,15 @@ def main(args):
     try:
         clt_config_batchtopk = CLTConfig(**config_dict_batchtopk)
         logger.info(f"Loaded BatchTopK CLTConfig: {clt_config_batchtopk}")
+        
+        # Print detailed config for debugging
+        logger.info("=" * 80)
+        logger.info("DETAILED CLT CONFIG:")
+        logger.info("=" * 80)
+        for key, value in clt_config_batchtopk.__dict__.items():
+            logger.info(f"  {key}: {value}")
+        logger.info("=" * 80)
+        
     except Exception as e:
         logger.error(f"Error creating CLTConfig from {args.config_path}: {e}")
         return
@@ -183,7 +213,90 @@ def main(args):
         logger.error(f"Error loading BatchTopK model state: {e}")
         return
 
-    # 3. Initialize ActivationStore for theta estimation
+    # 3. Calculate NMSE/EV BEFORE conversion
+    logger.info("Calculating NMSE/EV for original BatchTopK model before conversion...")
+    
+    try:
+        # Initialize activation store for pre-conversion evaluation
+        pre_conv_store = LocalActivationStore(
+            dataset_path=args.activation_data_path,
+            train_batch_size_tokens=args.estimation_batch_size_tokens,
+            device=device,
+            dtype=args.activation_dtype or clt_config_batchtopk.expected_input_dtype or "float32",
+            rank=0,
+            world=1,
+            seed=args.seed + 100,  # Different seed for pre-conversion
+            sampling_strategy="sequential",
+            normalization_method=clt_config_batchtopk.normalization_method,
+        )
+        
+        # Collect data for evaluation
+        pre_conv_inputs = {}
+        pre_conv_targets = {}
+        data_iter = iter(pre_conv_store)
+        
+        for batch_idx in range(min(args.num_batches_for_l0_check, 5)):  # Use up to 5 batches for pre-conversion check
+            try:
+                inputs_batch, targets_batch = next(data_iter)
+                for layer_idx, inp in inputs_batch.items():
+                    if layer_idx not in pre_conv_inputs:
+                        pre_conv_inputs[layer_idx] = []
+                        pre_conv_targets[layer_idx] = []
+                    if inp.numel() > 0:
+                        target = targets_batch[layer_idx]
+                        # Flatten if needed
+                        if inp.dim() == 3:
+                            inp = inp.reshape(-1, inp.shape[-1])
+                            target = target.reshape(-1, target.shape[-1])
+                        pre_conv_inputs[layer_idx].append(inp.cpu())
+                        pre_conv_targets[layer_idx].append(target.cpu())
+            except StopIteration:
+                break
+        
+        # Concatenate and move to device
+        for layer_idx in pre_conv_inputs:
+            if pre_conv_inputs[layer_idx]:
+                pre_conv_inputs[layer_idx] = torch.cat(pre_conv_inputs[layer_idx], dim=0).to(device)
+                pre_conv_targets[layer_idx] = torch.cat(pre_conv_targets[layer_idx], dim=0).to(device)
+        
+        # Get reconstructions from original model
+        with torch.no_grad():
+            pre_conv_reconstructions = model(pre_conv_inputs)
+        
+        # Calculate metrics
+        mean_tg = pre_conv_store.mean_tg if hasattr(pre_conv_store, 'mean_tg') else None
+        std_tg = pre_conv_store.std_tg if hasattr(pre_conv_store, 'std_tg') else None
+        
+        evaluator = CLTEvaluator(
+            model=model, 
+            device=device, 
+            mean_tg=mean_tg, 
+            std_tg=std_tg,
+            normalization_method=clt_config_batchtopk.normalization_method,
+            d_model=clt_config_batchtopk.d_model
+        )
+        reconstruction_metrics = evaluator._compute_reconstruction_metrics(
+            targets=pre_conv_targets, 
+            reconstructions=pre_conv_reconstructions
+        )
+        
+        pre_conv_nmse = reconstruction_metrics.get("reconstruction/normalized_mean_reconstruction_error", float("nan"))
+        pre_conv_ev = reconstruction_metrics.get("reconstruction/explained_variance", float("nan"))
+        
+        # Calculate L0
+        pre_conv_l0s = run_quick_l0_checks_script(model, pre_conv_inputs, args.num_tokens_for_l0_check_script)
+        pre_conv_l0_total = sum(l0 for l0 in pre_conv_l0s.values() if not math.isnan(l0))
+        
+        # Report pre-conversion metrics
+        print_performance_metrics("BEFORE CONVERSION (BatchTopK)", pre_conv_nmse, pre_conv_ev, pre_conv_l0_total, pre_conv_l0s)
+        
+        if hasattr(pre_conv_store, "close"):
+            pre_conv_store.close()
+            
+    except Exception as e:
+        logger.warning(f"Failed to calculate pre-conversion metrics: {e}")
+    
+    # 4. Initialize ActivationStore for theta estimation
     logger.info(f"Initializing LocalActivationStore from: {args.activation_data_path} for theta estimation")
     if not os.path.exists(args.activation_data_path):
         logger.error(f"Activation data path not found: {args.activation_data_path}")
@@ -201,7 +314,7 @@ def main(args):
             world=1,
             seed=args.seed,
             sampling_strategy="sequential",  # Sequential is fine for estimation
-            normalization_method="auto",  # Or "none" if data is not normalized
+            normalization_method=clt_config_batchtopk.normalization_method,  # Use the same normalization as training
         )
         logger.info("Activation store for theta estimation initialized.")
     except Exception as e:
@@ -281,7 +394,7 @@ def main(args):
             world=1,
             seed=args.seed + 1,
             sampling_strategy="sequential",
-            normalization_method="auto",
+            normalization_method=clt_config_batchtopk.normalization_method,  # Use the same normalization as training
         )
         data_iterator_for_l0_check = iter(activation_store_for_l0_check)
 
@@ -344,20 +457,16 @@ def main(args):
         # Allow to proceed with any data collected so far
 
     # --- Finalize and Log Metrics ---
-    logger.info("Empirical L0 per layer (averaged over collected data):")
     total_empirical_l0 = 0.0
     empirical_l0s_per_layer = {}
     for layer_idx in range(model.config.num_layers):
         if total_tokens_for_l0_per_layer.get(layer_idx, 0) > 0:
             avg_l0 = total_l0_per_layer[layer_idx] / total_tokens_for_l0_per_layer[layer_idx]
             empirical_l0s_per_layer[layer_idx] = avg_l0
-            logger.info(f"  Layer {layer_idx}: {avg_l0:.2f}")
             if not math.isnan(avg_l0):
                 total_empirical_l0 += avg_l0
         else:
             empirical_l0s_per_layer[layer_idx] = float("nan")
-            logger.info(f"  Layer {layer_idx}: nan (no tokens processed)")
-    logger.info(f"Total Empirical L0 across all layers: {total_empirical_l0:.2f}")
 
     # Compute and log NMSE
     logger.info("Computing NMSE on collected data...")
@@ -375,7 +484,14 @@ def main(args):
             "Insufficient data for NMSE calculation after processing (empty reconstructions or targets). Skipping NMSE."
         )
     else:
-        evaluator = CLTEvaluator(model=model, device=device, mean_tg=mean_tg_for_eval, std_tg=std_tg_for_eval)
+        evaluator = CLTEvaluator(
+            model=model, 
+            device=device, 
+            mean_tg=mean_tg_for_eval, 
+            std_tg=std_tg_for_eval,
+            normalization_method=clt_config_batchtopk.normalization_method,
+            d_model=clt_config_batchtopk.d_model
+        )
         # Filter to common layers with data
         valid_layers_for_nmse = set(final_reconstructions.keys()) & set(final_targets.keys())
         reconstructions_for_metric = {k: v for k, v in final_reconstructions.items() if k in valid_layers_for_nmse}
@@ -389,8 +505,9 @@ def main(args):
             )
             nmse_value = reconstruction_metrics.get("reconstruction/normalized_mean_reconstruction_error", float("nan"))
             explained_variance = reconstruction_metrics.get("reconstruction/explained_variance", float("nan"))
-            logger.info(f"Normalized Mean Squared Error (NMSE) on collected data: {nmse_value:.4f}")
-            logger.info(f"Explained Variance (EV) on collected data: {explained_variance:.4f}")
+            
+            # Report post-conversion metrics using standardized format
+            print_performance_metrics("AFTER CONVERSION (JumpReLU)", nmse_value, explained_variance, total_empirical_l0, empirical_l0s_per_layer)
 
     # --- Optional Layer-wise L0 Calibration --- #
     if args.l0_layerwise_calibrate:
@@ -469,7 +586,7 @@ def main(args):
                 world=1,
                 seed=args.seed + 2,  # Use a different seed
                 sampling_strategy="sequential",
-                normalization_method="auto",  # Let it normalize if needed, though L0 is on post-activation
+                normalization_method=original_clt_config.normalization_method,  # Use the same normalization as the original model
             )
             data_iterator_for_calib = iter(activation_store_for_calib)
             for _ in range(args.l0_calibration_batches):
@@ -539,16 +656,10 @@ def main(args):
         )
 
         # 5. Log final L0s of the calibrated model
-        logger.info("--- L0s after Layer-wise Calibration ---")
         calibrated_l0s_per_layer = run_quick_l0_checks_script(
             model, final_calibration_inputs, args.num_tokens_for_l0_check_script
         )
-        total_calibrated_l0 = 0.0
-        for layer_idx, l0_val in calibrated_l0s_per_layer.items():
-            logger.info(f"  Layer {layer_idx}: {l0_val:.2f} (Target: {target_l0s.get(layer_idx, float('nan')):.2f})")
-            if not (isinstance(l0_val, float) and math.isnan(l0_val)):
-                total_calibrated_l0 += l0_val
-        logger.info(f"Total Empirical L0 across all layers (Calibrated): {total_calibrated_l0:.2f}")
+        total_calibrated_l0 = sum(l0 for l0 in calibrated_l0s_per_layer.values() if not math.isnan(l0))
 
         # 6. Re-save the calibrated model
         logger.info(f"Re-saving calibrated JumpReLU model state to: {args.output_model_path}")
@@ -578,7 +689,7 @@ def main(args):
                 world=1,
                 seed=args.seed + 1,  # Use same seed as pre-calibration check
                 sampling_strategy="sequential",
-                normalization_method="auto",
+                normalization_method=clt_config_batchtopk.normalization_method,  # Use the same normalization as training
             )
             iterator_post_calib = iter(store_for_post_calib_eval)
 
@@ -624,7 +735,12 @@ def main(args):
             logger.warning("Insufficient data for post-calibration NMSE calculation. Skipping.")
         else:
             evaluator_after_calib = CLTEvaluator(
-                model=model, device=device, mean_tg=mean_tg_for_eval, std_tg=std_tg_for_eval
+                model=model, 
+                device=device, 
+                mean_tg=mean_tg_for_eval, 
+                std_tg=std_tg_for_eval,
+                normalization_method=clt_config_batchtopk.normalization_method,
+                d_model=clt_config_batchtopk.d_model
             )
             valid_layers = set(final_post_calib_recons.keys()) & set(final_post_calib_targets.keys())
             recons_metric = {k: v for k, v in final_post_calib_recons.items() if k in valid_layers}
@@ -638,8 +754,9 @@ def main(args):
                     "reconstruction/normalized_mean_reconstruction_error", float("nan")
                 )
                 ev_after_calib = metrics_after_calib.get("reconstruction/explained_variance", float("nan"))
-                logger.info(f"NMSE (post-L0-calibration): {nmse_after_calib:.4f}")
-                logger.info(f"EV (post-L0-calibration): {ev_after_calib:.4f}")
+                
+                # Report post-L0-calibration metrics using standardized format
+                print_performance_metrics("AFTER L0 CALIBRATION (JumpReLU)", nmse_after_calib, ev_after_calib, total_calibrated_l0, calibrated_l0s_per_layer)
             else:
                 logger.warning("No common layers with data for post-calibration NMSE calculation. Skipping.")
 

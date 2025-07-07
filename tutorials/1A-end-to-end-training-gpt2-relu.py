@@ -107,7 +107,7 @@ print(clt_config)
 # Use a small number of target tokens for the tutorial
 activation_dir = "./tutorial_activations_local_1M"
 # Fix SyntaxError: remove parenthesis around string assignment
-dataset_name = "monology/pile-uncopyrighted"  # "NeelNanda/pile-10k" is smaller if needed
+dataset_name = "EleutherAI/SmolLM2-135M-10B"  # "NeelNanda/pile-10k" is smaller if needed
 activation_config = ActivationConfig(
     # Model Source
     model_name=BASE_MODEL_NAME,
@@ -177,19 +177,19 @@ training_config = TrainingConfig(
     # Activation source - use local manifest-based store
     activation_source="local_manifest",  # Changed from 'local'
     activation_path=expected_activation_path,  # Point to generated data directory
-    activation_dtype="float32",  # Specify dtype for loading/training
+    activation_dtype="float16",  # Specify dtype for loading/training
     # Training batch size
     train_batch_size_tokens=_batch_size,
     sampling_strategy="sequential",
+    precision="fp16",
     # Normalization for training (use stored stats)
-    normalization_method="mean_std",  # Use stats from norm_stats.json generated earlier
+    normalization_method="none",  # Use stats from norm_stats.json generated earlier
     # Loss function coefficients
-    sparsity_lambda=0,
+    sparsity_lambda=0.00003,
     sparsity_lambda_schedule="linear",
     # sparsity_lambda_delay_frac=0.10,
-    sparsity_c=0,
+    sparsity_c=1.0,
     preactivation_coef=0,
-    aux_loss_factor=1 / 32,  # Enable AuxK loss with typical factor from paper
     # Optimizer & Scheduler
     optimizer="adamw",
     lr_scheduler="linear_final20",

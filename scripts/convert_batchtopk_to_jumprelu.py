@@ -216,6 +216,13 @@ def main(args):
     # 3. Calculate NMSE/EV BEFORE conversion
     logger.info("Calculating NMSE/EV for original BatchTopK model before conversion...")
     
+    # Log batch size for BatchTopK models
+    if clt_config_batchtopk.activation_fn == "batchtopk":
+        logger.info(
+            f"BatchTopK model with k={clt_config_batchtopk.batchtopk_k} (per token), "
+            f"mode={clt_config_batchtopk.topk_mode}, batch_size={args.estimation_batch_size_tokens}"
+        )
+    
     try:
         # Initialize activation store for pre-conversion evaluation
         pre_conv_store = LocalActivationStore(
@@ -235,7 +242,10 @@ def main(args):
         pre_conv_targets = {}
         data_iter = iter(pre_conv_store)
         
-        for batch_idx in range(min(args.num_batches_for_l0_check, 5)):  # Use up to 5 batches for pre-conversion check
+        # Use limited batches for pre-conversion check to save memory
+        num_pre_conv_batches = min(args.num_batches_for_l0_check, 5)
+        
+        for batch_idx in range(num_pre_conv_batches):  # Use limited batches for pre-conversion check
             try:
                 inputs_batch, targets_batch = next(data_iter)
                 for layer_idx, inp in inputs_batch.items():
@@ -881,10 +891,17 @@ def calibrate_layerwise_theta_for_l0_matching(
 
 
 def run_quick_l0_checks_script(
-    model: CrossLayerTranscoder, sample_batch_inputs: Dict[int, torch.Tensor], num_tokens_to_check: int
+    model: CrossLayerTranscoder, sample_batch_inputs: Dict[int, torch.Tensor], num_tokens_to_check: Optional[int] = None
 ) -> Dict[int, float]:
     """Helper function for L0 checks within the script.
-    Returns a dictionary of empirical L0 per layer."""
+    Returns a dictionary of empirical L0 per layer.
+    
+    Args:
+        model: The CrossLayerTranscoder model
+        sample_batch_inputs: Dict of layer inputs
+        num_tokens_to_check: If provided, sample this many tokens for L0 calculation.
+                           If None, use all tokens in the batch.
+    """
     model.eval()  # Ensure model is in eval mode
     empirical_l0s_per_layer: Dict[int, float] = {}
 
@@ -924,10 +941,20 @@ def run_quick_l0_checks_script(
                 if total_tokens_processed == 0:
                     avg_empirical_l0_this_layer = float("nan")
                 else:
+                    # Apply consistent sampling logic with JumpReLU path
+                    if num_tokens_to_check is not None and num_tokens_to_check < total_tokens_processed:
+                        # Sample a subset of tokens for consistency
+                        indices = torch.randperm(total_tokens_processed, device=acts_layer.device)[:num_tokens_to_check]
+                        acts_layer_sampled = acts_layer[indices]
+                        logger.debug(f"Layer {layer_idx}: Sampling {num_tokens_to_check} tokens out of {total_tokens_processed} for L0 calculation")
+                    else:
+                        # Use all tokens
+                        acts_layer_sampled = acts_layer
+                    
                     # Count **non-zero** activations regardless of sign – BatchTopK can select negative
                     # pre-activations.  We therefore look at the absolute value to decide if a feature
                     # is active.
-                    l0_per_token = (acts_layer.abs() > 1e-8).sum(dim=1).float()
+                    l0_per_token = (acts_layer_sampled.abs() > 1e-8).sum(dim=1).float()
                     avg_empirical_l0_this_layer = l0_per_token.mean().item()
 
                 empirical_l0s_per_layer[layer_idx] = avg_empirical_l0_this_layer
